@@ -1,0 +1,161 @@
+---
+title: "Predicting an activity from sensors data"
+author: "Peter Strauch"
+date: "23th september 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it.  
+
+#### About project
+In this project, my goal will be to use data from sensors to predict activity. This project is part of graduation for [Practical Machine Learning](https://www.coursera.org/learn/practical-machine-learning) course (Peer-graded assignment).
+
+#### About data
+Data comes from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+
+## Loading data
+At first, we need to download and load 2 datasets - one for building model, and other for some kind of validation (to answer quiz as a part of Course grade).
+```{r, message=FALSE, warning=FALSE}
+library(caret); library(ggplot2); library(randomForest)
+```
+
+```{r, cache=TRUE}
+# download data
+url1 <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+url2 <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+download.file(url1, "pml-data.csv")
+download.file(url2, "pml-validation.csv")
+
+# load data for building a model and for validation
+data       <- read.csv("pml-data.csv", row.names = "X", na.strings = c("",NA))
+validating <- read.csv("pml-validation.csv",  row.names = "X", na.strings = c("",NA))
+```
+There are `r nrow(data)` rows in the data.
+
+
+## Split data into training and testing dataset
+We will validate data at the end (20-rows dataset, Quiz: Course Project Prediction Quiz - 20 questions). Before that, we want to train prediction algorithm and test it how accurate is on independent dataset -- we split the data into **training** and **testing** dataset.
+
+Reason why training data is a litte bit larger (90%) is that we will use cross-validation on training data (next splitting of training dataset). We will use rest of the data (10%-cut-off) for estimate of out-of-sample accuracy.
+```{r}
+# split into training and testing data
+inTrain <- createDataPartition(data$classe, p = 0.9, list = FALSE)
+training <- data[inTrain,]
+testing <- data[-inTrain,]
+
+# dimensions
+dim(training)
+dim(testing)
+```
+*Note:* I had long dilema how to split data. I learnt in the course to split big data into training and testing data. In this assignment, it looks like to use whole data as training data, and use cross-validation because we don't have testing data to check confusion matrix and out-of-sample accuracy. I tried to do both and the results are almost the same.
+
+Finaly, I used knowledge from the course. I devided dataset consists of `r nrow(data)` rows on testing and training data. Second 20-rows dataset, I used it as some kind of validating dataset (validation through quiz in the course).
+
+
+## Exploration on training subset
+We can do some exploration - how can be sensor data related, for example *roll_belt* and *pitch_forearm*.
+```{r}
+# plot
+qplot(x = roll_belt, y = pitch_forearm, data = training, col=classe)
+```
+
+We can see that there are not strict clusters or something like that. Similar graphs are also for other features.
+
+
+## Cleaning data
+Next step is to exclude features (variables) which is not relevant for the prediction -- data which doesn't become from sensors (some kind of labeling variables). Also, we excluded features which has very low variance (near zero) and would be bad predictors. Moreover, some features included too many NA values (Imputation via K-Nearest Neighbors is not possible to do).
+```{r}
+# not relevant features (name, timestamp, window)
+noSensorData <- 1:6
+
+# identify near zero variance predictors
+nsv <- nearZeroVar(training, saveMetrics = T)
+head(nsv, n = 20)
+lowVariance <- which(nsv$nzv==TRUE)
+
+# almost empty columns
+numberNAinCol <- colSums(is.na(training))
+table(numberNAinCol)
+almostEmpty <- which(numberNAinCol != 0)
+
+# exclude columns
+exclude <- unique(unname(c(noSensorData, lowVariance, almostEmpty)))
+training <- training[, -exclude]
+```
+*Note*: For near zero variance, Only first 20 variables are printed because I don't want long report.
+
+## Build a model
+We want to predict type of activity -- factor variable. This is classification problem and we have several ways how to do that. We use **random forest** (sensor data are characteristic by some random noise) with 10 trees for this purpose. 
+
+We don't use preprocessing of training data, because:
+
++ classidication - no need to *scale* and *center*,
++ no NA values - no need to *knnImpute*.
++ I tried to use *PCA* because there were some features hightly corelated with other, but I got worse results after *pca* preprocessing.
+
+We use cross-validation on training data because we want to average the estimates (in-sample error and accuracy). While the dataset is quite big, we use 10-fold cross-validation.
+```{r, cache=TRUE}
+# train a model - random forest
+modelFit <- train(classe~., data = training, method = "rf", ntree = 10, 
+                  trControl = trainControl(method = "cv", number = 10))
+```
+
+We can check for in-sample accuracy, parameters of model, and what variables are most important in the model. Graph shows how accuracy of the model depends on randomly selected predictors.
+```{r}
+# model
+modelFit
+plot(modelFit)
+
+# final model
+modelFit$finalModel
+
+# accuracy for each of 10 folds
+modelFit$resample
+
+# variable importance
+varImp(modelFit)
+```
+
+We can view some tree in the random forest (for exmaple 2nd), but it is too long. Here is at least first 15 rows of that tree.
+```{r}
+head(getTree(modelFit$finalModel, k = 2), n = 15)
+```
+
+
+#### Previous predicting aproaches
+We tried to use also other aproaches:
+
++ **decision tree** (method="rpart"), most simple and easy-to-explain model, but that model had accuracy only about 50%,
++ **boosting on trees** (method="gbm") but results was similar to random forest and learning took longer,
++ **neural networks** (method="nnet") but results was worse and learning took longer too.
+
+
+## Prediction on testing data
+We can expect that out-of-sample accuracy will be lower then in-sample (`r round(modelFit$results[2,2],4)`) because of overfitting. But while we used cross-validation, it can be similar accuracy.
+
+While we did 10%-cut-off from the data, we can check for out-of-sample accuracy. Also we can visualize confusion matrix in the plot and see what points are missclassified (thanks to geom="jitter", points doesn't overwrite themselves at diagonal, but points outside of diagonal are slightly scattered).
+```{r}
+## confusion matrix
+confusionMatrix(testing$classe, predict(modelFit, testing))
+
+## plot
+qplot(x = testing$classe, y = predict(modelFit, testing), 
+      data = testing, col=classe, geom = "jitter", 
+      main = "Comparison of predicted and observed classe in testing data", 
+      xlab = "observed", ylab = "predicted")
+
+```
+
+
+## Validation - prediction for the quiz
+At the end, we wanted to predict activity based on the model. Here is prediction for 20 different cases.
+```{r}
+predict(modelFit, validating)
+```
+
