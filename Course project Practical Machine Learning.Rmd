@@ -2,7 +2,10 @@
 title: "Predicting an activity from sensors data"
 author: "Peter Strauch"
 date: "23th september 2018"
-output: html_document
+output: 
+    html_document:
+        keep_md: TRUE
+    
 ---
 
 ```{r setup, include=FALSE}
